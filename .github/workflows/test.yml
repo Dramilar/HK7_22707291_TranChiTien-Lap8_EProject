@@ -35,36 +35,49 @@ jobs:
             product/package-lock.json
             order/package-lock.json
 
-      - name: Install root deps (for mocha/wait-on in host tests)
+      - name: Install root deps (for mocha in host)
         run: npm ci
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Build & Up toàn bộ stack theo docker-compose.yml của bạn
+      # 🔧 Tạo override chỉ cho CI: đổi depends_on -> service_started
+      - name: Write docker-compose CI override
+        run: |
+          cat > docker-compose.ci.override.yml <<'YAML'
+          services:
+            api-gateway:
+              depends_on:
+                auth:
+                  condition: service_started
+                product:
+                  condition: service_started
+                order:
+                  condition: service_started
+          YAML
+          echo "===> CI override created"
+
       - name: Compose build
-        run: docker compose build
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml build
 
       - name: Compose up (detached)
-        run: docker compose up -d
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml up -d
 
-      # CHỜ Gateway sẵn sàng. Nếu bạn có /health ở gateway thì sửa URL bên dưới cho chính xác.
+      # ⏱️ Chờ API Gateway sẵn sàng qua cổng public 3003 từ host
       - name: Wait for API Gateway (3003)
         run: |
-          for i in {1..60}; do
+          for i in {1..90}; do
             if curl -fsS http://localhost:3003/health >/dev/null 2>&1; then
-              echo "Gateway is healthy"; exit 0
+              echo "Gateway /health OK"; exit 0
             fi
-            # fallback nếu chưa có /health thì dùng trang root
             if curl -fsS http://localhost:3003 >/dev/null 2>&1; then
               echo "Gateway root responded (no /health)"; exit 0
             fi
-            echo "Waiting gateway... ($i/60)"; sleep 2
+            echo "Waiting gateway... ($i/90)"; sleep 2
           done
-          echo "Gateway not ready in time"; docker compose ps; docker compose logs api-gateway; exit 1
+          echo "Gateway not ready in time"; docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps; docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs api-gateway; exit 1
 
-      # Nếu test của bạn cần biết base URL, set biến môi trường để test luôn gọi qua 3003
-      - name: Run tests (root mocha -> đập vào gateway 3003)
+      - name: Run tests (root mocha via gateway)
         env:
           BASE_URL: "http://localhost:3003"
           GATEWAY_URL: "http://localhost:3003"
@@ -73,18 +86,18 @@ jobs:
 
       - name: Dump compose status
         if: always()
-        run: docker compose ps
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps
 
       - name: Collect service logs
         if: always()
         run: |
           mkdir -p logs
-          docker compose logs --no-color mongo > logs/mongo.log || true
-          docker compose logs --no-color rabbitmq > logs/rabbitmq.log || true
-          docker compose logs --no-color auth > logs/auth.log || true
-          docker compose logs --no-color product > logs/product.log || true
-          docker compose logs --no-color order > logs/order.log || true
-          docker compose logs --no-color api-gateway > logs/gateway.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color mongo > logs/mongo.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color rabbitmq > logs/rabbitmq.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color auth > logs/auth.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color product > logs/product.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color order > logs/order.log || true
+          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color api-gateway > logs/gateway.log || true
 
       - name: Upload logs/artifacts
         if: always()
@@ -98,7 +111,7 @@ jobs:
 
       - name: Compose down
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml down -v
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
