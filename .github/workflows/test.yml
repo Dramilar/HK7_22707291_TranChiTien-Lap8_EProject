@@ -1,179 +1,80 @@
-name: CI & Release
+name: CI
 
 on:
-  push:
-    branches: ["main"]
-    tags:
-      - "v*"
-  pull_request:
-    branches: ["main"]
-
-permissions:
-  contents: write
-
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  push: { branches: ["main"] }
+  pull_request: { branches: ["main"] }
 
 jobs:
-  ci:
+  unit:
     runs-on: ubuntu-latest
-
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, product, order, api-gateway]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          node-version: "18"
-          cache: "npm"
+          node-version: 18
+          cache: npm
           cache-dependency-path: |
             package-lock.json
-            api-gateway/package-lock.json
             auth/package-lock.json
             product/package-lock.json
             order/package-lock.json
-
-      # ✅ CÀI DEP CHO TỪNG SERVICE TRÊN HOST (để Mocha import được source trong service)
-      - name: Install deps (auth)
-        working-directory: auth
+            api-gateway/package-lock.json
+      - name: Install deps
+        working-directory: ${{ matrix.service }}
         run: npm ci
-
-      - name: Install deps (product)
-        working-directory: product
-        run: npm ci
-
-      - name: Install deps (order)
-        working-directory: order
-        run: npm ci
-
-      - name: Install deps (api-gateway)
-        working-directory: api-gateway
-        run: npm ci
-
-      # (nếu root có test/tools riêng)
-      - name: Install root deps (for mocha runner)
-        run: npm ci
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      # 🔧 Override dành cho CI: tránh kẹt healthcheck
-      - name: Write docker-compose CI override
+      - name: Run unit tests
+        working-directory: ${{ matrix.service }}
         run: |
-          cat > docker-compose.ci.override.yml <<'YAML'
-          services:
-            api-gateway:
-              depends_on:
-                auth:
-                  condition: service_started
-                product:
-                  condition: service_started
-                order:
-                  condition: service_started
-          YAML
-          echo "===> CI override created"
+          if npm run | grep -q "test:unit"; then npm run test:unit; else npm test; fi
 
-      - name: Compose build
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml build
+  integration:
+    needs: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+      - name: Install root deps (E2E runner)
+        run: npm ci
 
-      - name: Compose up (detached)
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml up -d
+      - name: Docker Compose up
+        run: docker compose up -d --build
 
-      # ⏱️ Chờ Gateway hoạt động
-      - name: Wait for API Gateway (3003)
-        shell: bash
+      - name: Wait for Gateway
         run: |
-          ok=""
           for i in {1..90}; do
-            code=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:3003/health || true)
-            if [[ "$code" == "200" || "$code" == "204" ]]; then
-              echo "Gateway /health $code"; ok="yes"; break
-            fi
-            if curl -sS -o /dev/null http://localhost:3003; then
-              echo "Gateway reachable (root responded)"; ok="yes"; break
-            fi
-            echo "Waiting gateway... ($i/90)"; sleep 2
+            code=$(curl -sS -o /dev/null -w "%{http_code}" http://127.0.0.1:3003/health || true)
+            [[ "$code" == "200" || "$code" == "204" ]] && exit 0
+            echo "waiting gateway ($i/90)"; sleep 2
           done
+          echo "gateway not ready"; docker compose ps; docker compose logs --no-color api-gateway; exit 1
 
-          if [ -z "$ok" ]; then
-            echo "Gateway not ready in time"
-            echo "==== docker compose ps ===="
-            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps
-            echo "---- api-gateway logs ----"
-            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color api-gateway || true
-            echo "---- auth logs ----"
-            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color auth || true
-            echo "---- product logs ----"
-            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color product || true
-            echo "---- order logs ----"
-            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color order || true
-            exit 1
-          fi
-
-      # 🧪 Chạy test trên host (đã có node_modules của từng service)
-      - name: Run tests (root mocha via gateway)
+      - name: Run E2E tests (via Gateway)
         env:
-          BASE_URL: "http://localhost:3003"
-          GATEWAY_URL: "http://localhost:3003"
-          # Nếu JWT_SECRET trống, fallback trong shell bên dưới
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-        shell: bash
-        run: |
-          : "${JWT_SECRET:=mysecretkey}"
-          export JWT_SECRET
-          npm test
+          GATEWAY_URL: http://127.0.0.1:3003
+          BASE_URL: http://127.0.0.1:3003
+          JWT_SECRET: ${{ secrets.JWT_SECRET || 'mysecretkey' }}
+          MONGODB_AUTH_URI: mongodb://127.0.0.1:27017/auth_db_test
+          MONGODB_PRODUCT_URI: mongodb://127.0.0.1:27017/product_db_test
+          RABBITMQ_URL: amqp://127.0.0.1:5672
+        run: npm test
 
-      - name: Dump compose status
-        if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps
-
-      - name: Collect service logs
+      - name: Collect logs (always)
         if: always()
         run: |
           mkdir -p logs
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color mongo > logs/mongo.log || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color rabbitmq > logs/rabbitmq.log || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color auth > logs/auth.log || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color product > logs/product.log || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color order > logs/order.log || true
-          docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color api-gateway > logs/gateway.log || true
-
-      - name: Upload logs/artifacts
+          docker compose logs --no-color > logs/stack.log || true
+      - uses: actions/upload-artifact@v4
         if: always()
-        uses: actions/upload-artifact@v4
         with:
-          name: compose-and-test-logs
-          path: |
-            logs/**
-            **/coverage/**
-          if-no-files-found: ignore
-
-      - name: Compose down
+          name: integration-logs
+          path: logs/**
+      - name: Down
         if: always()
-        run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml down -v
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [ci]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Build release artifact (zip source)
-        run: |
-          mkdir -p dist
-          zip -r "dist/nodejs-microservices-${{ github.ref_name }}.zip" \
-            api-gateway auth product order \
-            docker-compose.yml \
-            package.json package-lock.json README.md \
-            -x "**/node_modules/**" "**/.env" "**/dist/**" "**/.git/**"
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/nodejs-microservices-${{ github.ref_name }}.zip
-          draft: false
-          prerelease: false
+        run: docker compose down -v
