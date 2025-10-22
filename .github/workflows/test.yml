@@ -2,11 +2,11 @@ name: CI & Release
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
     tags:
       - "v*"
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   contents: write
@@ -35,13 +35,31 @@ jobs:
             product/package-lock.json
             order/package-lock.json
 
-      - name: Install root deps (for mocha/tests on host)
+      # ✅ CÀI DEP CHO TỪNG SERVICE TRÊN HOST (để Mocha import được source trong service)
+      - name: Install deps (auth)
+        working-directory: auth
+        run: npm ci
+
+      - name: Install deps (product)
+        working-directory: product
+        run: npm ci
+
+      - name: Install deps (order)
+        working-directory: order
+        run: npm ci
+
+      - name: Install deps (api-gateway)
+        working-directory: api-gateway
+        run: npm ci
+
+      # (nếu root có test/tools riêng)
+      - name: Install root deps (for mocha runner)
         run: npm ci
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 🔧 Override chỉ dùng trong CI: chuyển depends_on sang service_started để tránh kẹt healthcheck trong container
+      # 🔧 Override dành cho CI: tránh kẹt healthcheck
       - name: Write docker-compose CI override
         run: |
           cat > docker-compose.ci.override.yml <<'YAML'
@@ -63,17 +81,16 @@ jobs:
       - name: Compose up (detached)
         run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml up -d
 
-      # ⏱️ Chờ API Gateway hoạt động (chỉ cần reachable, không bắt buộc 200)
+      # ⏱️ Chờ Gateway hoạt động
       - name: Wait for API Gateway (3003)
+        shell: bash
         run: |
           ok=""
           for i in {1..90}; do
-            # /health trả 200/204 -> pass
             code=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:3003/health || true)
             if [[ "$code" == "200" || "$code" == "204" ]]; then
               echo "Gateway /health $code"; ok="yes"; break
             fi
-            # Root trả bất kỳ mã HTTP -> coi như cổng hoạt động
             if curl -sS -o /dev/null http://localhost:3003; then
               echo "Gateway reachable (root responded)"; ok="yes"; break
             fi
@@ -95,13 +112,18 @@ jobs:
             exit 1
           fi
 
-      # (Giữ nguyên cách test hiện tại của bạn: mocha ở root)
+      # 🧪 Chạy test trên host (đã có node_modules của từng service)
       - name: Run tests (root mocha via gateway)
         env:
           BASE_URL: "http://localhost:3003"
           GATEWAY_URL: "http://localhost:3003"
-          JWT_SECRET: ${{ secrets.JWT_SECRET || 'mysecretkey' }}
-        run: npm test
+          # Nếu JWT_SECRET trống, fallback trong shell bên dưới
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+        shell: bash
+        run: |
+          : "${JWT_SECRET:=mysecretkey}"
+          export JWT_SECRET
+          npm test
 
       - name: Dump compose status
         if: always()
