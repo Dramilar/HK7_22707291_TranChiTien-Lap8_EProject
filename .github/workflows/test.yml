@@ -1,0 +1,125 @@
+name: CI & Release
+
+on:
+  push:
+    branches: [ "main" ]
+    tags:
+      - "v*"
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+          cache: "npm"
+          cache-dependency-path: |
+            package-lock.json
+            api-gateway/package-lock.json
+            auth/package-lock.json
+            product/package-lock.json
+            order/package-lock.json
+
+      - name: Install root deps (for mocha/wait-on in host tests)
+        run: npm ci
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Build & Up toàn bộ stack theo docker-compose.yml của bạn
+      - name: Compose build
+        run: docker compose build
+
+      - name: Compose up (detached)
+        run: docker compose up -d
+
+      # CHỜ Gateway sẵn sàng. Nếu bạn có /health ở gateway thì sửa URL bên dưới cho chính xác.
+      - name: Wait for API Gateway (3003)
+        run: |
+          for i in {1..60}; do
+            if curl -fsS http://localhost:3003/health >/dev/null 2>&1; then
+              echo "Gateway is healthy"; exit 0
+            fi
+            # fallback nếu chưa có /health thì dùng trang root
+            if curl -fsS http://localhost:3003 >/dev/null 2>&1; then
+              echo "Gateway root responded (no /health)"; exit 0
+            fi
+            echo "Waiting gateway... ($i/60)"; sleep 2
+          done
+          echo "Gateway not ready in time"; docker compose ps; docker compose logs api-gateway; exit 1
+
+      # Nếu test của bạn cần biết base URL, set biến môi trường để test luôn gọi qua 3003
+      - name: Run tests (root mocha -> đập vào gateway 3003)
+        env:
+          BASE_URL: "http://localhost:3003"
+          GATEWAY_URL: "http://localhost:3003"
+          JWT_SECRET: ${{ secrets.JWT_SECRET || 'mysecretkey' }}
+        run: npm test
+
+      - name: Dump compose status
+        if: always()
+        run: docker compose ps
+
+      - name: Collect service logs
+        if: always()
+        run: |
+          mkdir -p logs
+          docker compose logs --no-color mongo > logs/mongo.log || true
+          docker compose logs --no-color rabbitmq > logs/rabbitmq.log || true
+          docker compose logs --no-color auth > logs/auth.log || true
+          docker compose logs --no-color product > logs/product.log || true
+          docker compose logs --no-color order > logs/order.log || true
+          docker compose logs --no-color api-gateway > logs/gateway.log || true
+
+      - name: Upload logs/artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compose-and-test-logs
+          path: |
+            logs/**
+            **/coverage/**
+          if-no-files-found: ignore
+
+      - name: Compose down
+        if: always()
+        run: docker compose down -v
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [ci]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build release artifact (zip source)
+        run: |
+          mkdir -p dist
+          zip -r "dist/nodejs-microservices-${{ github.ref_name }}.zip" \
+            api-gateway auth product order \
+            docker-compose.yml \
+            package.json package-lock.json README.md \
+            -x "**/node_modules/**" "**/.env" "**/dist/**" "**/.git/**"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/nodejs-microservices-${{ github.ref_name }}.zip
+          draft: false
+          prerelease: false
