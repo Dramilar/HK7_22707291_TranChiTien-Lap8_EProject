@@ -35,13 +35,13 @@ jobs:
             product/package-lock.json
             order/package-lock.json
 
-      - name: Install root deps (for mocha in host)
+      - name: Install root deps (for mocha/tests on host)
         run: npm ci
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 🔧 Tạo override chỉ cho CI: đổi depends_on -> service_started
+      # 🔧 Override chỉ dùng trong CI: chuyển depends_on sang service_started để tránh kẹt healthcheck trong container
       - name: Write docker-compose CI override
         run: |
           cat > docker-compose.ci.override.yml <<'YAML'
@@ -63,20 +63,39 @@ jobs:
       - name: Compose up (detached)
         run: docker compose -f docker-compose.yml -f docker-compose.ci.override.yml up -d
 
-      # ⏱️ Chờ API Gateway sẵn sàng qua cổng public 3003 từ host
+      # ⏱️ Chờ API Gateway hoạt động (chỉ cần reachable, không bắt buộc 200)
       - name: Wait for API Gateway (3003)
         run: |
+          ok=""
           for i in {1..90}; do
-            if curl -fsS http://localhost:3003/health >/dev/null 2>&1; then
-              echo "Gateway /health OK"; exit 0
+            # /health trả 200/204 -> pass
+            code=$(curl -sS -o /dev/null -w "%{http_code}" http://localhost:3003/health || true)
+            if [[ "$code" == "200" || "$code" == "204" ]]; then
+              echo "Gateway /health $code"; ok="yes"; break
             fi
-            if curl -fsS http://localhost:3003 >/dev/null 2>&1; then
-              echo "Gateway root responded (no /health)"; exit 0
+            # Root trả bất kỳ mã HTTP -> coi như cổng hoạt động
+            if curl -sS -o /dev/null http://localhost:3003; then
+              echo "Gateway reachable (root responded)"; ok="yes"; break
             fi
             echo "Waiting gateway... ($i/90)"; sleep 2
           done
-          echo "Gateway not ready in time"; docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps; docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs api-gateway; exit 1
 
+          if [ -z "$ok" ]; then
+            echo "Gateway not ready in time"
+            echo "==== docker compose ps ===="
+            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml ps
+            echo "---- api-gateway logs ----"
+            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color api-gateway || true
+            echo "---- auth logs ----"
+            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color auth || true
+            echo "---- product logs ----"
+            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color product || true
+            echo "---- order logs ----"
+            docker compose -f docker-compose.yml -f docker-compose.ci.override.yml logs --no-color order || true
+            exit 1
+          fi
+
+      # (Giữ nguyên cách test hiện tại của bạn: mocha ở root)
       - name: Run tests (root mocha via gateway)
         env:
           BASE_URL: "http://localhost:3003"
