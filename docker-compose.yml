@@ -70,6 +70,7 @@ services:
       - PORT=3000
       - JWT_SECRET=mysecretkey
       - MONGODB_AUTH_URI=mongodb://mongo:27017/authdb
+      - MONGODB_URI=mongodb://mongo:27017/authdb    # phòng khi code dùng tên khác
     expose:
       - "3000"                    # chỉ nội bộ
     depends_on:
@@ -94,6 +95,7 @@ services:
       - MONGODB_PRODUCT_URI=mongodb://mongo:27017/productdb
       # Nếu code dùng tên biến khác cho AMQP thì giữ cả hai để an toàn
       - RABBITMQ_URL=amqp://rabbitmq:5672
+      - RABBITMQ_URI=amqp://rabbitmq:5672
       - AMQP_URL=amqp://rabbitmq:5672
     expose:
       - "3001"                    # chỉ nội bộ
