@@ -34,6 +34,7 @@ services:
 
   # ===================== Application Services =====================
   api-gateway:
+    image: ghcr.io/Dramilar/HK7_22707291_TranChiTien-Lap8_EProject/api-gateway:latest
     build:
       context: ./api-gateway
       dockerfile: Dockerfile
