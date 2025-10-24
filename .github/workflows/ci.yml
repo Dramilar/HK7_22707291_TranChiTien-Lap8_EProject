@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  unit:
+    name: Unit (${{ matrix.service }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [auth, product, order, api-gateway]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            auth/package-lock.json
+            product/package-lock.json
+            order/package-lock.json
+            api-gateway/package-lock.json
+
+      - name: Install
+        working-directory: ${{ matrix.service }}
+        run: npm ci
+
+      - name: Lint (optional)
+        working-directory: ${{ matrix.service }}
+        run: |
+          node -e "const p=require('./package.json'); if(!p.scripts||!p.scripts.lint) process.exit(0)"
+          npm run lint
+
+      - name: Run unit tests (infra-safe)
+        working-directory: ${{ matrix.service }}
+        env:
+          INTEGRATION: "0" # cho phép test rẽ nhánh, tránh gọi DB/RabbitMQ
+        shell: bash
+        run: |
+          set -e
+          # Chỉ chạy nếu có script test, tránh lỗi 'mocha: not found'
+          node -e "const p=require('./package.json'); if(!p.scripts||!p.scripts.test){console.log('No test script. Skipping.');process.exit(0)}"
+          echo "✅ Running npm test in ${{ matrix.service }}..."
+          npm test
