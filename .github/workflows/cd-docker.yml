@@ -2,10 +2,10 @@ name: CD - Docker Build & Deploy (auto + GHCR & DockerHub)
 
 on:
   push:
-    branches: ["main"]          # ✅ Tự chạy khi push lên main
+    branches: ["main"]  # ✅ Tự chạy khi push lên main
     tags:
-      - "v*.*.*"                # ✅ Chạy khi đẩy tag vX.Y.Z
-  workflow_dispatch:            # ✅ Chạy thủ công
+      - "v*.*.*"        # ✅ Chạy khi đẩy tag vX.Y.Z
+  workflow_dispatch:            # ✅ Chạy thủ công
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write   # cho GHCR
+      packages: write  # cho GHCR
 
     steps:
       - name: Checkout
