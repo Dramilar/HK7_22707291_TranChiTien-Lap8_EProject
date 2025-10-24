@@ -2,10 +2,10 @@ name: CD - Docker Build & Deploy (auto + GHCR & DockerHub)
 
 on:
   push:
-    branches: ["main"]  # ✅ Tự chạy khi push lên main
+    branches: ["main"]       # ✅ Tự chạy khi push lên main
     tags:
-      - "v*.*.*"        # ✅ Chạy khi đẩy tag vX.Y.Z
-  workflow_dispatch:            # ✅ Chạy thủ công
+      - "v*.*.*"             # ✅ Chạy khi đẩy tag vX.Y.Z
+  workflow_dispatch:           # ✅ Chạy thủ công
 
 env:
   REGISTRY_GHCR: ghcr.io
@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write  # cho GHCR
+      packages: write   # cho GHCR
 
     steps:
       - name: Checkout
@@ -57,8 +57,8 @@ jobs:
           HUB_USER="${{ secrets.DOCKERHUB_USERNAME }}"
           # Lấy basename của repo rồi sanitize về lowercase cho hợp lệ trên Hub
           BASENAME="$(echo "${GITHUB_REPOSITORY##*/}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9_.-]/-/g')"
-          echo "dockerhub_user=${HUB_USER}"       >> $GITHUB_OUTPUT
-          echo "dockerhub_basename=${BASENAME}"   >> $GITHUB_OUTPUT
+          echo "dockerhub_user=${HUB_USER}"      >> $GITHUB_OUTPUT
+          echo "dockerhub_basename=${BASENAME}"   >> $GITHUB_OUTPUT
 
       - name: Decide version tag
         id: tag
@@ -66,11 +66,11 @@ jobs:
         run: |
           if [[ "${GITHUB_REF_TYPE}" == "tag" && "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "version=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
-            echo "extra=latest"               >> $GITHUB_OUTPUT
+            echo "extra=latest"               >> $GITHUB_OUTPUT
           else
             short_sha=$(echo "${GITHUB_SHA}" | cut -c1-7)
-            echo "version=${short_sha}"       >> $GITHUB_OUTPUT
-            echo "extra=latest"               >> $GITHUB_OUTPUT
+            echo "version=${short_sha}"       >> $GITHUB_OUTPUT
+            echo "extra=latest"               >> $GITHUB_OUTPUT
           fi
           echo "Resolved tags: version=$(cat $GITHUB_OUTPUT | grep '^version=' | cut -d= -f2), extra=$(cat $GITHUB_OUTPUT | grep '^extra=' | cut -d= -f2)"
 
@@ -109,34 +109,35 @@ jobs:
               --push
           done
 
-  deploy:
-    name: Deploy via SSH (docker compose)
-    needs: build-and-push
-    # ĐÃ VÔ HIỆU HÓA: Thay thế điều kiện phức tạp hiện tại bằng 'if: false'
-    if: false 
-    runs-on: ubuntu-latest
-    steps:
-      - name: SSH deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          script_stop: true
-          script: |
-            set -e
-            cd ${{ secrets.DEPLOY_PATH }}
-            # Server của bạn nên dùng image GHCR hoặc DockerHub (chọn 1)
-            # Nếu đang dùng GHCR trong docker-compose.yml thì lệnh sau sẽ kéo GHCR:
-            docker compose pull
-            docker compose up -d
-            for i in {1..30}; do
-              if curl -fsS http://localhost:3003 >/dev/null 2>&1; then
-                echo "✅ Gateway is up."
-                break
-              else
-                echo "⏳ Waiting gateway... ($i/30)"
-                sleep 3
-              fi
-            done
-            docker image prune -f
+#   deploy:
+#     name: Deploy via SSH (docker compose)
+#     #----------------------------------
+#     needs: build-and-push
+#     # Deploy khi push main, push tag, hoặc run thủ công
+#     if: github.ref_type == 'branch' && github.ref_name == 'main' || github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+#     runs-on: ubuntu-latest
+#     steps:
+#       - name: SSH deploy
+#         uses: appleboy/ssh-action@v1.0.3
+#         with:
+#           host: ${{ secrets.DEPLOY_HOST }}
+#           username: ${{ secrets.DEPLOY_USER }}
+#           key: ${{ secrets.DEPLOY_SSH_KEY }}
+#           script_stop: true
+#           script: |
+#             set -e
+#             cd ${{ secrets.DEPLOY_PATH }}
+#             # Server của bạn nên dùng image GHCR hoặc DockerHub (chọn 1)
+#             # Nếu đang dùng GHCR trong docker-compose.yml thì lệnh sau sẽ kéo GHCR:
+#             docker compose pull
+#             docker compose up -d
+#             for i in {1..30}; do
+#               if curl -fsS http://localhost:3003 >/dev/null 2>&1; then
+#                 echo "✅ Gateway is up."
+#                 break
+#               else
+#                 echo "⏳ Waiting gateway... ($i/30)"
+#                 sleep 3
+#               fi
+#             done
+#             docker image prune -f
