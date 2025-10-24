@@ -21,6 +21,11 @@ app.use("/orders", (req, res) => {
 
 // Start the server
 const port = process.env.PORT || 3003;
+
+// app/index.js mỗi service
+app.get('/health', (req,res)=>res.status(200).json({status:'ok'}));
+
+
 app.listen(port, () => {
   console.log(`API Gateway listening on port ${port}`);
 });
