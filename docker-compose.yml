@@ -1,3 +1,4 @@
+version: "3.8"
 
 services:
   # ===================== Infrastructure (internal only) =====================
@@ -71,13 +72,14 @@ services:
       - JWT_SECRET=mysecretkey
       - MONGODB_AUTH_URI=mongodb://mongo:27017/authdb
       - MONGODB_URI=mongodb://mongo:27017/authdb    # phòng khi code dùng tên khác
+
     expose:
       - "3000"                    # chỉ nội bộ
     depends_on:
       mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
+      test: ["CMD-SHELL", "nc -z localhost 3000 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -105,7 +107,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3001/health || exit 1"]
+      test: ["CMD-SHELL", "nc -z localhost 3001 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -134,7 +136,7 @@ services:
       rabbitmq:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3002/health || exit 1"]
+      test: ["CMD-SHELL", "nc -z localhost 3002 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
