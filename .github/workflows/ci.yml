@@ -31,24 +31,30 @@ jobs:
             order/package-lock.json
             api-gateway/package-lock.json
 
-      - name: Install
+      - name: Install dependencies
         working-directory: ${{ matrix.service }}
         run: npm ci
 
       - name: Lint (optional)
         working-directory: ${{ matrix.service }}
+        shell: bash
         run: |
-          node -e "const p=require('./package.json'); if(!p.scripts||!p.scripts.lint) process.exit(0)"
-          npm run lint
+          if node -e "process.exit(!((require('./package.json').scripts||{}).lint))"; then
+            echo '✅ Found "lint" script. Running...'
+            npm run lint
+          else
+            echo '⚠️  No "lint" script. Skipping.'
+          fi
 
       - name: Run unit tests (infra-safe)
         working-directory: ${{ matrix.service }}
-        env:
-          INTEGRATION: "0" # cho phép test rẽ nhánh, tránh gọi DB/RabbitMQ
         shell: bash
+        env:
+          INTEGRATION: "0"
         run: |
-          set -e
-          # Chỉ chạy nếu có script test, tránh lỗi 'mocha: not found'
-          node -e "const p=require('./package.json'); if(!p.scripts||!p.scripts.test){console.log('No test script. Skipping.');process.exit(0)}"
-          echo "✅ Running npm test in ${{ matrix.service }}..."
-          npm test
+          if node -e "process.exit(!((require('./package.json').scripts||{}).test))"; then
+            echo '✅ Found "test" script. Running...'
+            npm test
+          else
+            echo '⚠️  No "test" script. Skipping.'
+          fi
