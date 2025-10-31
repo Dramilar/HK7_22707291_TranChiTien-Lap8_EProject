@@ -96,10 +96,10 @@ class ProductController {
   }
 
   async getProductById(req, res, next) {
-    const { id } = req.body;
+    const {id} = req.body;
     const product = await Product.findById(id);
-    if (!product) {
-      return res.status(404).json({ message: 'Product not found' });
+    if(!product) {
+      return res.status(404).json({message : 'Product not found'});
     }
     return res.status(200).json(product);
   }
